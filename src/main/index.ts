@@ -238,6 +238,14 @@ function registerIpc(): void {
   })
 }
 
+process.on('uncaughtException', (err) => {
+  // Never let a stray exception take down the main process and pop a modal.
+  console.warn('[main] uncaughtException', err)
+})
+process.on('unhandledRejection', (reason) => {
+  console.warn('[main] unhandledRejection', reason)
+})
+
 app.whenReady().then(async () => {
   const settings = getSettings()
   coach = new ApexCoach(settings.coach)

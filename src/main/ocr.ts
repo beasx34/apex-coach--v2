@@ -6,16 +6,30 @@ import { nativeImage } from 'electron'
 import type { HudReadout, OcrLayout, AmmoState } from '@common/types'
 
 let worker: Worker | null = null
+let workerInit: Promise<Worker> | null = null
 
-async function getWorker(): Promise<Worker> {
+async function getWorker(): Promise<Worker | null> {
   if (worker) return worker
-  worker = await createWorker('eng')
-  // HUD digits are clean — restrict character set to drastically improve
-  // accuracy and speed.
-  await worker.setParameters({
-    tessedit_char_whitelist: '0123456789/'
-  })
-  return worker
+  if (!workerInit) {
+    workerInit = (async () => {
+      const w = await createWorker('eng')
+      // HUD digits are clean — restrict character set to drastically improve
+      // accuracy and speed.
+      await w.setParameters({ tessedit_char_whitelist: '0123456789/' })
+      worker = w
+      return w
+    })().catch((err) => {
+      console.warn('[ocr] failed to initialise tesseract worker', err)
+      workerInit = null
+      // Surface as a null worker; callers fall back to empty readings.
+      throw err
+    })
+  }
+  try {
+    return await workerInit
+  } catch {
+    return null
+  }
 }
 
 export async function shutdownOcr(): Promise<void> {
@@ -27,14 +41,21 @@ export async function shutdownOcr(): Promise<void> {
 
 /**
  * Crop a region out of a PNG buffer. The output is also a PNG buffer so it
- * round-trips cleanly through tesseract.js.
+ * round-trips cleanly through tesseract.js. Returns `null` if the rectangle
+ * falls outside the image (e.g. capture resolution does not match the layout).
  */
 function cropRegion(
   source: Buffer,
   rect: [number, number, number, number]
-): Buffer {
+): Buffer | null {
   const img = nativeImage.createFromBuffer(source)
-  const cropped = img.crop({ x: rect[0], y: rect[1], width: rect[2], height: rect[3] })
+  if (img.isEmpty()) return null
+  const { width, height } = img.getSize()
+  const [x, y, w, h] = rect
+  if (x < 0 || y < 0 || w <= 0 || h <= 0) return null
+  if (x + w > width || y + h > height) return null
+  const cropped = img.crop({ x, y, width: w, height: h })
+  if (cropped.isEmpty()) return null
   return cropped.toPNG()
 }
 
@@ -53,10 +74,19 @@ function parseFraction(s: string | undefined): { num: number | null; den: number
   return { num: parseInt0(match[1]), den: parseInt0(match[2]) }
 }
 
-async function recognize(buffer: Buffer): Promise<string> {
-  const w = await getWorker()
-  const { data } = await w.recognize(buffer)
-  return data.text.trim()
+async function recognize(buffer: Buffer | null): Promise<string> {
+  if (!buffer) return ''
+  try {
+    const w = await getWorker()
+    if (!w) return ''
+    const { data } = await w.recognize(buffer)
+    return data.text.trim()
+  } catch (err) {
+    // A bad single frame must never crash the main process — return empty
+    // so the reducer carries forward the last good reading.
+    console.warn('[ocr] recognize error', err)
+    return ''
+  }
 }
 
 /**
