@@ -1,0 +1,24 @@
+appId: ai.devin.apex-coach-overlay
+productName: Apex Coach Overlay
+directories:
+  output: release/${version}
+files:
+  - out/**/*
+  - resources/**/*
+  - package.json
+asar: true
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-win-${arch}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+linux:
+  target:
+    - AppImage
+  category: Game
+  artifactName: ${productName}-${version}-linux-${arch}.${ext}
